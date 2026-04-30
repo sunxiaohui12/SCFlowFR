@@ -1,8 +1,5 @@
-# SCFlowFR & FlowSR-lightning
 
-Official PyTorch / PyTorch Lightning implementation for the paper:
-
-**[Linearized Coupling Flow with Shortcut Constraints for One-Step Face Restoration](https://arxiv.org/abs/2603.03648)**
+# **[Linearized Coupling Flow with Shortcut Constraints for One-Step Face Restoration](https://arxiv.org/abs/2603.03648)**
 
 | Resource | Link |
 |----------|------|
