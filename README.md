@@ -1,33 +1,9 @@
 
 # Linearized Coupling Flow with Shortcut Constraints for One-Step Face Restoration
 
-| Resource | Link |
-|----------|------|
-| arXiv (abstract) | [https://arxiv.org/abs/2603.03648](https://arxiv.org/abs/2603.03648) |
 | arXiv (PDF) | [https://arxiv.org/pdf/2603.03648.pdf](https://arxiv.org/pdf/2603.03648.pdf) |
 
-This repo builds on **FlowSR-style** flow matching with shortcut constraints for face restoration (see `flowsr/` for models, training loop, and configs).
-
----
-
-## Released checkpoints (two model sizes)
-
-We provide **two checkpoints** that match the paper experiments but differ in **backbone capacity**: the **latent UNet** (`EfficientShortcutUnet`) and the **first-stage encoder / decoder** (VAE).
-
-| | **Large** | **Tiny** |
-|---|-----------|----------|
-| **Role** | Higher quality, heavier compute | Faster / lighter, smaller VRAM |
-| **Shortcut Flow** | `ShortcutFlowModel` (`segment_K: 128`, `boostrap_every: 4`, `schedule: linear`) — same as Tiny |
-| **UNet (`net_cfg`)** | Deeper: `channel_mult: [1, 2, 4, 8]`, 4 levels | Lighter: `channel_mult: [1, 2, 4]`, 3 levels |
-| **First stage (latent space)** | `AutoencoderKL` — `pretrained-models/sd_ae.ckpt` | `TAESD` (Tiny VAE) — `taesd_encoder.pth` / `taesd_decoder.pth` |
-| **`scale_factor`** | `0.18215` (SD-style latent scaling) | `1.0` |
-| **Training steps (released)** | **200k** | **150k** |
-| **Config template** | `shortcutfm_face_codeformer.yaml` (KL-VAE + large UNet) | `shortcutfm_face_tiny.yaml` |
-| **Download** | *To be added (e.g. Hugging Face / Google Drive) — 200k step checkpoint* | *To be added — 150k step checkpoint* |
-
-SwinIR context path in both training configs: `pretrained-models/swinir/face_swinir_v1.ckpt` (you still need this file locally for training; for inference the default script uses a SwinIR path you can set in `inference.py`).
-
-> **Note:** `inference.py` is written around the **Tiny** stack (TAESD + `scale_factor: 1.0`). To run the **Large** model, point `config_path` to the **Large** run’s `config.yaml` and matching checkpoint, and ensure the script’s VAE loader matches `first_stage_cfg` (KL + `scale_factor` 0.18215) — you may need to align `load_vae` with `AutoencoderKL` if it currently assumes TAESD only.
+**Weights (Baidu Netdisk):** folder **SCFlowSR** contains **`pretrained_models`** (SwinIR, VAE, etc.) and **`checkpoints`** (**Large** + **Tiny**). Link: [https://pan.baidu.com/s/1cfXHCQewKDrWrxCyZf1TUg?pwd=t6jf](https://pan.baidu.com/s/1cfXHCQewKDrWrxCyZf1TUg?pwd=t6jf) · extraction code: `t6jf`
 
 ---
 
@@ -61,22 +37,46 @@ FlowSR-lightning/
 └── load/                     # datasets & file lists (see below)
 ```
 
-Download SwinIR / VAE weights according to the **variant** you use (`swinir_path`, VAE paths, `scale_factor` in YAML).
+Download SwinIR / VAE weights according to the **variant** you use (`swinir_path`, VAE paths, `scale_factor` in YAML), or unpack **`pretrained_models`** from the Baidu **SCFlowSR** folder (same link as at the top of this README).
 
 ---
 
 ## Data preparation (training)
 
-1. **Prepare HR images** (e.g. FFHQ-style face crops) and a **file list** (one image path per line).
-2. Point the dataset config to your list and backend, e.g. in `configs/shortcutfm_face_tiny.yaml` or the Large variant config:
+### `train.list` / `valid.list` format
 
-   - `data.params.train.params.file_list` → training list  
-   - `data.params.validation.params.file_list` → validation list  
-   - `file_backend_cfg` → `HardDiskBackend` and correct root if needed.
+Both are **plain text**: **one image path per line** (UTF-8). Paths are usually **absolute**; each line is read as one HR training image (`CodeformerDataset`). Blank lines are skipped.
 
-3. Create parent directories as needed, e.g. `load/FFHQ/`, and place `train.list` / `valid.list` (or your names) there.
+Example:
 
-4. **Batch size & workers**: tune `data.params.batch_size` and `num_workers` for your GPU memory (**Large** needs more VRAM than **Tiny**).
+```
+/path/to/ffhq/00001.png
+/path/to/ffhq/00002.png
+```
+
+### How to build the lists
+
+- **By hand:** Collect HR faces (e.g. FFHQ crops), then write `train.list` / `valid.list` yourself with any editor.
+- **Helper script:** From repo root, `scripts/make_file_list.py` walks `--img_folder` for `.jpg`/`.png`/`.jpeg`, writes **`train.list`** (all images) and **`valid.list`** (the first `--val_size` paths only). By default training and validation sets **overlap** on those first `val_size` images; for a disjoint split, write your own lists or adjust the script.
+
+```bash
+python scripts/make_file_list.py \
+  --img_folder /path/to/hr_images \
+  --save_folder load/FFHQ \
+  --val_size 1000
+```
+
+Writes `load/FFHQ/train.list` and `load/FFHQ/valid.list`.
+
+### Config
+
+In `configs/shortcutfm_face_tiny.yaml` (or the Large config), set:
+
+- `data.params.train.params.file_list` → `load/FFHQ/train.list` (or your path)  
+- `data.params.validation.params.file_list` → `load/FFHQ/valid.list`  
+- `file_backend_cfg` → `HardDiskBackend` if files are on local disk.
+
+**Batch size & workers:** tune `data.params.batch_size` and `num_workers` for your GPU (**Large** needs more VRAM than **Tiny**).
 
 ---
 
@@ -116,6 +116,8 @@ Checkpoints and a resolved `config.yaml` are saved under `logs/.../checkpoints/`
 
 ## Inference
 
+We release **two pretrained checkpoints** (different model sizes): pair **`shortcutfm_face_codeformer.yaml`** with the **Large** weight (200k steps), and **`shortcutfm_face_tiny.yaml`** with the **Tiny** weight (150k steps). Get both under **`checkpoints`** in the Baidu **SCFlowSR** folder (link at the top of this README). Use the **`config.yaml`** and **`.ckpt`** from the same training run (or matching released pair).
+
 The script **`inference.py`** loads **ShortcutFlowModel** + EMA + **VAE** + **SwinIR** from a **training `config.yaml`** and a **Lightning `.ckpt`** (see `load_model_from_config`).
 
 1. **Edit the paths** at the bottom of `inference.py`:
@@ -140,12 +142,7 @@ If `load_vae` only supports TAESD, extend it for **Large** inference with `Autoe
 
 ## Config overview
 
-`configs/` includes shortcut-flow face settings, e.g.:
-
-- **`shortcutfm_face_tiny.yaml`** — **Tiny** UNet + **TAESD** (matches **150k** released checkpoint).  
-- **`shortcutfm_face_codeformer.yaml`** — **Large** UNet + **KL VAE** (matches **200k** released checkpoint).
-
-Shared flow head: `flowsr.flow.ShortcutFlowModel` with `segment_K: 128`, `boostrap_every: 4`.
+Training configs live under `configs/` (e.g. `shortcutfm_face_tiny.yaml`, `shortcutfm_face_codeformer.yaml`). Flow model: `flowsr.flow.ShortcutFlowModel` with `segment_K: 128`, `boostrap_every: 4`.
 
 ---
 
