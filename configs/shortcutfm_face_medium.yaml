@@ -1,0 +1,151 @@
+model:
+  target: flowsr.trainer.FlowSRTrainer
+  params:
+    start_from_noise: False
+    # we can also first noise the image with the forward process of the
+    # diffusion process and do up-sampling from this perturbed image.
+    # If set to -1, we simply take the original image.
+    noising_step: 400
+    # if true, we concatenate the low-resolution image with the noise
+    concat_context: True
+    # if true, we provide input to cross-attention
+    ca_context: False
+    swinir_cfg:
+      target: flowsr.models.swinir.SwinIR
+      params:
+        img_size: 64
+        patch_size: 1
+        in_chans: 3
+        embed_dim: 180
+        depths: [6, 6, 6, 6, 6, 6, 6, 6]
+        num_heads: [6, 6, 6, 6, 6, 6, 6, 6]
+        window_size: 8
+        mlp_ratio: 2
+        sf: 8
+        img_range: 1.0
+        upsampler: "nearest+conv"
+        resi_connection: "1conv"
+        unshuffle: True
+        unshuffle_scale: 8
+    swinir_path: pretrained-models/swinir/face_swinir_v1.ckpt
+    # ------------------------ Flow matching model
+    fm_cfg:
+      target: flowsr.flow.ShortcutFlowModel
+      params:
+        segment_K: 128
+        boostrap_every: 4
+        schedule: linear
+        net_cfg:
+          target: flowsr.models.unet.model.EfficientShortcutUnet
+          params:
+            in_channels: 8    # 4 for the low-res image, 4 for the noise
+            model_channels: 128
+            out_channels: 4
+            num_res_blocks: 3
+            channel_mult: [1, 2, 4, 8]
+            # This isn't the resolution but the down-sampling factor.
+            # For each channel multiplier we down-sample the image
+            # by a factor of 2. Hence, the down-sampling factor increases
+            # by a factor of 2 for each channel multiplier. For an image
+            # with size 64x64 and four channel multipliers, the down-sampling
+            # factors are 1, 2, 4, 8. The attention resolutions are then
+            # 64, 32, 16, 8.
+            attention_resolutions: [8, 16]
+            dropout: 0.0
+            conv_resample: True
+            dim_head: 64
+            num_heads: 4
+            use_linear_attn: False
+            use_scale_shift_norm: True
+            pool_factor: -1
+    # first stage (KL-Autoencoder from LDM)
+    scale_factor: 1.0 # not used for AutoEncoderTiny
+    first_stage_cfg:
+      target: flowsr.models.tiny_autoencoder.TAESD
+      params:
+        encoder_path: pretrained-models/tiny_vae/taesd_encoder.pth
+        decoder_path: pretrained-models/tiny_vae/taesd_decoder.pth
+    # training parameters
+    lr: 1e-4
+    weight_decay: 0.0
+    # lr_scheduler_cfg: ...         # set LR scheduler if wanted
+    ema_rate: 0.999
+    ema_update_every: 1             # EMA update frequency
+    ema_update_after_step: 1000     # warmup steps without EMA
+    use_ema_for_sampling: True      # whether to use EMA model for sampling
+    # tracking metrics
+    metric_tracker_cfg:
+      target: flowsr.metrics.ImageMetricTracker
+      params:
+        num_crops: 4
+        crop_size: 512
+        calc_fid: False
+    # lr scheduler
+    lr_scheduler_cfg:
+      target: flowsr.lr_schedulers.get_constant_schedule_with_warmup
+      params:
+        num_warmup_steps: 1000
+    log_grad_norm: True
+    validation_timesteps: [1, 2, 4]
+
+
+data:
+  name: face
+  target: flowsr.data.DataModuleFromConfig
+  params:
+    train:
+      target: flowsr.data.codeformer.CodeformerDataset
+      params:
+        # training file list path
+        file_list: load/FFHQ/train.list
+        file_backend_cfg:
+          target: flowsr.data.file_backend.HardDiskBackend
+        out_size: 512
+        crop_type: center
+        blur_kernel_size: 41
+        kernel_list: ['iso', 'aniso']
+        kernel_prob: [0.5, 0.5]
+        blur_sigma: [0.1, 12]
+        downsample_range: [1, 12]
+        noise_range: [0, 15]
+        jpeg_range: [30, 100]
+    validation:
+      target: flowsr.data.codeformer.CodeformerDataset
+      params:
+        # validation file list path
+        file_list: load/FFHQ/valid.list
+        file_backend_cfg:
+          target: flowsr.data.file_backend.HardDiskBackend
+        out_size: 512
+        crop_type: center
+        blur_kernel_size: 41
+        kernel_list: ['iso', 'aniso']
+        kernel_prob: [0.5, 0.5]
+        blur_sigma: [0.1, 12]
+        downsample_range: [1, 12]
+        noise_range: [0, 15]
+        jpeg_range: [30, 100]
+    batch_size: 16
+    num_workers: 32
+
+
+train:
+  # checkpointing
+  checkpoint_callback_params:   # filename refers to number of gradient updates
+    every_n_train_steps: 50000  # gradient update steps
+    save_top_k: -1              # needs to be -1, otherwise it overwrites
+    verbose: True
+    save_last: True
+    auto_insert_metric_name: False
+  trainer_params:
+    max_epochs: -1
+    num_sanity_val_steps: 0
+    accumulate_grad_batches: 1
+    log_every_n_steps: 50       # gradient update steps
+    limit_val_batches: 64
+    val_check_interval: 500    # steps, regardless of gradient accumulation
+    precision: bf16-mixed
+  callbacks:
+    - target: pytorch_lightning.callbacks.LearningRateMonitor
+      params:
+        logging_interval: 'step'

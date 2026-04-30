@@ -1,0 +1,1 @@
+accelerate launch train_stage2.py --config configs/train/train_stage2_fid.yaml

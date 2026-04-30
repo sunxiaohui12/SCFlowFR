@@ -1,0 +1,73 @@
+model:
+  target: flowsr.trainer_nmse.NMSETrainer
+  params:
+    model_cfg:
+      target: flowsr.models.rrdbnet.RRDBNet
+    # first stage (KL-Autoencoder from LDM)
+    scale_factor: 0.18215
+    first_stage_cfg:
+      target: flowsr.models.kl_autoencoder.AutoencoderKL
+      params:
+        ckpt_path: pretrained-models/sd_ae.ckpt
+    # training parameters
+    lr: 1e-4
+    weight_decay: 0.0
+    # tracking metrics
+    metric_tracker_cfg:
+      target: flowsr.metrics.ImageMetricTracker
+      params:
+        num_crops: 4
+        crop_size: 512
+        calc_fid: False
+    # lr scheduler
+    lr_scheduler_cfg:
+      target: flowsr.lr_schedulers.get_constant_schedule_with_warmup
+      params:
+        num_warmup_steps: 1000
+    log_grad_norm: True
+
+data:
+  target: flowsr.data.DataModuleFromConfig
+  params:
+    batch_size: 4
+    num_workers: 16
+    train:
+      target: flowsr.data.downsampled_dataset.MultiScaleDownsampledDatasetWithFixedHRSize
+      params:
+        datapath: load/FFHQ/FFHQ512
+        min_scale: 1
+        max_scale: 8
+        is_train: true
+        hr_img_sz: 512
+        cache: none
+        data_length: 4000
+    validation:
+      target: flowsr.data.downsampled_dataset.DownsampledDataset
+      params:
+        datapath: load/FFHQ/FFHQ512
+        scale: 8
+        is_train: false
+        first_k: 4
+        cache: none
+
+train:
+  # checkpointing
+  checkpoint_callback_params:   # filename refers to number of gradient updates
+    every_n_train_steps: 50000  # gradient update steps
+    save_top_k: -1              # needs to be -1, otherwise it overwrites
+    verbose: True
+    save_last: True
+    auto_insert_metric_name: False
+  trainer_params:
+    max_epochs: -1
+    reload_dataloaders_every_n_epochs: 1
+    num_sanity_val_steps: 0
+    accumulate_grad_batches: 1
+    log_every_n_steps: 50       # gradient update steps
+    limit_val_batches: 64
+    val_check_interval: 500    # steps, regardless of gradient accumulation
+    precision: bf16-mixed
+  callbacks:
+    - target: pytorch_lightning.callbacks.LearningRateMonitor
+      params:
+        logging_interval: 'step'
